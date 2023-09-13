@@ -1,0 +1,70 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+```{r libraries}
+library(DESeq2)
+library(GenomicRanges)
+library(biomaRt)
+```
+```{r functions}
+
+```
+
+```{r main}
+# get big significant changes with the names of genes
+Rna=as.matrix(read.csv("EBF1-dTAG_N_exon_counts.tsv",sep="\t",row.names="Geneid"))
+meaningfulRNA=which(rowSums(Rna[,1:8])<20 )
+meaningfulRNA=Rna[-meaningfulRNA,]
+colnames(meaningfulRNA)=c("0h1","0h2","0h3","0h4","6h1","6h2","6h3","6h4")
+coldata=matrix(nrow = 8, ncol=1)
+coldata[1:4,]="0h"
+coldata[5:8,]="6h"
+colnames(coldata)="h"
+rownames(coldata)=c("0h1","0h2","0h3","0h4","6h1","6h2","6h3","6h4")
+dds <- DESeqDataSetFromMatrix(countData = meaningfulRNA,
+                              colData = coldata,
+                              design = ~ h)
+dds <- DESeq(dds)
+res=as.data.frame(results(dds))[,c(2,6)]
+res=res[-which(is.na(res$padj) |res$padj>0.05| abs(res$log2FoldChange)<1),]
+res$name=rownames(res)
+#res$name= sapply(res$name,function(x){strsplit(x,split="[.]")[[1]]})[1,]
+Cter=fread('EBF1-dTAG_C_ATAC_counts.mat',header=T)
+Nter=fread("EBF1-dTAG_N_ATAC_counts.mat",header=T)
+Cter$type="C"
+Nter$type="N"
+colnames(Cter)<-c("chr","start","end","0h1","0h2","6h1","6h2","type")
+colnames(Nter)<-c("chr","start","end","0h1","0h2","6h1","6h2","type")
+Dataset=rbind(Cter,Nter)
+coldata1=data.frame(matrix(nrow=4, ncol = 1))
+coldata1[1:2,]="0h"
+coldata1[3:4,]="6h"
+colnames(coldata1)="h"
+rownames(coldata1)=c("0h1","0h2","6h1","6h2")
+dds <- DESeqDataSetFromMatrix(countData = Dataset[,4:7],
+                              colData = coldata1,
+                              design = ~ h)
+dds <- DESeq(dds)
+significance=as.data.frame(results(dds))[,c(2,6)]
+Dataset$padj=significance[,2]
+Dataset$Log2=significance[,1]
+Dataset=Dataset[which(Dataset$padj<0.05&!is.na(Dataset$padj)&abs(Dataset$Log2)>1),]
+Dataset$end=sapply(Dataset$end, function(x){as.numeric(x)})
+Dataset$start=sapply(Dataset$start, function(x){as.numeric(x)})
+reads <- GRanges(Dataset[,1:3])
+
+```
+ensembl <- useMart(biomart = "ENSEMBL_MART_ENSEMBL",dataset="mmusculus_gene_ensembl")
+gene_annotations <- getBM(attributes = c("ensembl_gene_id", "chromosome_name", "start_position", "end_position"),
+                           mart = ensembl)
+genes <- GRanges(seqnames = gene_annotations$chromosome_name,
+                  ranges = IRanges(start = gene_annotations$start_position,
+                                    end = gene_annotations$end_position))
+
+# Find overlaps between reads and genes
+overlaps <- findOverlaps(reads, genes, ignore.strand = TRUE)
+
+# Annotate reads with gene information
+annotated_reads <- reads[subjectHits(overlaps)]
